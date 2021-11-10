@@ -2,9 +2,11 @@
 #![allow(unused_imports)]
 mod buffers;
 mod surface;
+mod textures;
 
 use buffers::vertex_buffer;
 use surface::state::State;
+
 use winit::{
     event::*,
     event_loop::{ControlFlow, EventLoop},

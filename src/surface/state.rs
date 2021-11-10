@@ -1,15 +1,8 @@
-use wgpu::{
-    util::{BufferInitDescriptor, DeviceExt},
-    Backends, BlendState, Buffer, BufferUsages, Color, ColorTargetState, ColorWrites,
-    CommandEncoderDescriptor, Device, DeviceDescriptor, Face, Features, FragmentState, Instance,
-    Limits, LoadOp, MultisampleState, Operations, PipelineLayoutDescriptor, PrimitiveState, Queue,
-    RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor,
-    RequestAdapterOptions, ShaderModuleDescriptor, ShaderSource, Surface, SurfaceConfiguration,
-    SurfaceError, TextureUsages, TextureViewDescriptor, VertexState,
-};
+use wgpu::{Backends, BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor, BindGroupLayoutEntry, BindingResource, BlendState, Buffer, BufferUsages, Color, ColorTargetState, ColorWrites, CommandEncoderDescriptor, Device, DeviceDescriptor, Extent3d, Face, Features, FragmentState, ImageCopyTexture, ImageDataLayout, Instance, Limits, LoadOp, MultisampleState, Operations, Origin3d, PipelineLayoutDescriptor, PrimitiveState, Queue, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, RequestAdapterOptions, SamplerDescriptor, ShaderModuleDescriptor, ShaderSource, ShaderStages, Surface, SurfaceConfiguration, SurfaceError, TextureDescriptor, TextureFormat, TextureUsages, TextureViewDescriptor, VertexState, util::{BufferInitDescriptor, DeviceExt}};
 use winit::{dpi::PhysicalSize, event::WindowEvent, window::Window};
 
-use crate::buffers::vertex_buffer::{INDICES, VERTICES, Vertex};
+use crate::buffers::vertex_buffer::{Vertex, INDICES, VERTICES};
+use crate::textures::texture;
 
 pub struct State {
     surface: Surface,
@@ -20,7 +13,9 @@ pub struct State {
     render_pipeline: RenderPipeline,
     vertex_buffer: Buffer,
     index_buffer: Buffer,
-    num_vertices: u32
+    num_vertices: u32,
+    diffuse_bind_group: BindGroup,
+    diffuse_texture: texture::Texture
 }
 
 impl State {
@@ -62,9 +57,75 @@ impl State {
             source: wgpu::ShaderSource::Wgsl(include_str!("..\\shader\\shader.wgsl").into()),
         });
 
+
+
+
+
+        surface.configure(&device, &config);
+
+        let diffuse_bytes = include_bytes!("..\\textures\\happy-tree.png");
+        let diffuse_texture = texture::Texture::from_bytes(&device, &queue, diffuse_bytes, "..\\textures\\happy-tree.png").unwrap();
+
+        let texture_bind_group_layout = device.create_bind_group_layout(
+            &BindGroupLayoutDescriptor{
+                entries:&[
+                    BindGroupLayoutEntry{
+                        binding: 0,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Texture{
+                            multisampled: false,
+                            view_dimension: wgpu::TextureViewDimension::D2,
+                            sample_type: wgpu::TextureSampleType::Float {filterable: true}
+                        },
+                        count: None
+                    },
+                    BindGroupLayoutEntry{
+                        binding: 1,
+                        visibility: ShaderStages::FRAGMENT,
+                        ty: wgpu::BindingType::Sampler{
+                            comparison: false,
+                            filtering: true
+                        },
+                        count: None
+                    }
+                ],
+                label: Some("textture_bind_group_layout")
+            }
+        );
+
+        let diffuse_bind_group = device.create_bind_group(
+            &BindGroupDescriptor {
+                layout: &texture_bind_group_layout,
+                entries: &[
+                    BindGroupEntry{
+                        binding: 0,
+                        resource: BindingResource::TextureView(&diffuse_texture.view),                       
+                    },
+                    BindGroupEntry{
+                        binding: 1,
+                        resource: BindingResource::Sampler(&diffuse_texture.sampler),                       
+                    },
+                ],
+                label: Some("diffuse_bind_group")
+            }
+        );
+
+        let vertex_buffer = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(VERTICES),
+            usage: BufferUsages::VERTEX,
+        });
+
+        let index_buffer = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("Index Buffer"),
+            contents: bytemuck::cast_slice(INDICES),
+            usage: BufferUsages::INDEX,
+        });
+
+        
         let render_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Render Pipeline Layout"),
-            bind_group_layouts: &[],
+            bind_group_layouts: &[&texture_bind_group_layout],
             push_constant_ranges: &[],
         });
 
@@ -74,9 +135,7 @@ impl State {
             vertex: VertexState {
                 module: &shader,
                 entry_point: "vs_main",
-                buffers: &[
-                    Vertex::desc()
-                ],
+                buffers: &[Vertex::desc()],
             },
             fragment: Some(FragmentState {
                 module: &shader,
@@ -104,22 +163,6 @@ impl State {
             },
         });
 
-        surface.configure(&device, &config);
-
-        let vertex_buffer = device.create_buffer_init(&BufferInitDescriptor {
-            label: Some("Vertex Buffer"),
-            contents: bytemuck::cast_slice(VERTICES),
-            usage: BufferUsages::VERTEX,
-        });
-
-        let index_buffer = device.create_buffer_init(
-            &BufferInitDescriptor{
-                label: Some("Index Buffer"),
-                contents: bytemuck::cast_slice(INDICES),
-                usage: BufferUsages::INDEX
-            }
-        );
-
         let num_vertices = INDICES.len() as u32;
 
         Self {
@@ -131,7 +174,9 @@ impl State {
             render_pipeline,
             vertex_buffer,
             index_buffer,
-            num_vertices
+            num_vertices,
+            diffuse_bind_group,
+            diffuse_texture
         }
     }
 
@@ -180,9 +225,10 @@ impl State {
             });
 
             render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..self.num_vertices,0, 0..1);
+            render_pass.draw_indexed(0..self.num_vertices, 0, 0..1);
         }
         self.queue.submit(std::iter::once(enconder.finish()));
         output.present();
