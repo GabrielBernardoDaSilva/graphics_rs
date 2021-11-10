@@ -1,5 +1,15 @@
-use wgpu::{Backends, BlendState, Color, ColorTargetState, ColorWrites, CommandEncoderDescriptor, Device, DeviceDescriptor, Face, Features, FragmentState, Instance, Limits, LoadOp, MultisampleState, Operations, PipelineLayoutDescriptor, PrimitiveState, Queue, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor, RequestAdapterOptions, ShaderModuleDescriptor, ShaderSource, Surface, SurfaceConfiguration, SurfaceError, TextureUsages, TextureViewDescriptor, VertexState};
+use wgpu::{
+    util::{BufferInitDescriptor, DeviceExt},
+    Backends, BlendState, Buffer, BufferUsages, Color, ColorTargetState, ColorWrites,
+    CommandEncoderDescriptor, Device, DeviceDescriptor, Face, Features, FragmentState, Instance,
+    Limits, LoadOp, MultisampleState, Operations, PipelineLayoutDescriptor, PrimitiveState, Queue,
+    RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline, RenderPipelineDescriptor,
+    RequestAdapterOptions, ShaderModuleDescriptor, ShaderSource, Surface, SurfaceConfiguration,
+    SurfaceError, TextureUsages, TextureViewDescriptor, VertexState,
+};
 use winit::{dpi::PhysicalSize, event::WindowEvent, window::Window};
+
+use crate::buffers::vertex_buffer::{INDICES, VERTICES, Vertex};
 
 pub struct State {
     surface: Surface,
@@ -8,6 +18,9 @@ pub struct State {
     config: SurfaceConfiguration,
     pub size: PhysicalSize<u32>,
     render_pipeline: RenderPipeline,
+    vertex_buffer: Buffer,
+    index_buffer: Buffer,
+    num_vertices: u32
 }
 
 impl State {
@@ -49,61 +62,76 @@ impl State {
             source: wgpu::ShaderSource::Wgsl(include_str!("..\\shader\\shader.wgsl").into()),
         });
 
-        let render_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor
-        {
-            label:Some("Render Pipeline Layout"),
+        let render_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
+            label: Some("Render Pipeline Layout"),
             bind_group_layouts: &[],
-            push_constant_ranges: &[]
+            push_constant_ranges: &[],
         });
 
-        let render_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor
-        {
+        let render_pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
             label: Some("Render Pipeline"),
             layout: Some(&render_pipeline_layout),
-            vertex: VertexState
-            {
+            vertex: VertexState {
                 module: &shader,
                 entry_point: "vs_main",
-                buffers: &[]
+                buffers: &[
+                    Vertex::desc()
+                ],
             },
-            fragment: Some(FragmentState
-            {
+            fragment: Some(FragmentState {
                 module: &shader,
                 entry_point: "fs_main",
-                targets: &[
-                    ColorTargetState
-                    {
-                        format: config.format,
-                        blend: Some(BlendState::REPLACE),
-                        write_mask: ColorWrites::ALL
-                    }
-                ]
+                targets: &[ColorTargetState {
+                    format: config.format,
+                    blend: Some(BlendState::REPLACE),
+                    write_mask: ColorWrites::ALL,
+                }],
             }),
-            primitive: PrimitiveState{
+            primitive: PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
                 front_face: wgpu::FrontFace::Ccw,
                 cull_mode: Some(Face::Back),
                 polygon_mode: wgpu::PolygonMode::Fill,
                 clamp_depth: false,
-                conservative: false
+                conservative: false,
             },
             depth_stencil: None,
-            multisample: MultisampleState
-            {
+            multisample: MultisampleState {
                 count: 1,
                 mask: !0,
-                alpha_to_coverage_enabled: false
-            }
+                alpha_to_coverage_enabled: false,
+            },
         });
+
         surface.configure(&device, &config);
+
+        let vertex_buffer = device.create_buffer_init(&BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(VERTICES),
+            usage: BufferUsages::VERTEX,
+        });
+
+        let index_buffer = device.create_buffer_init(
+            &BufferInitDescriptor{
+                label: Some("Index Buffer"),
+                contents: bytemuck::cast_slice(INDICES),
+                usage: BufferUsages::INDEX
+            }
+        );
+
+        let num_vertices = INDICES.len() as u32;
+
         Self {
             surface,
             device,
             queue,
             config,
             size,
-            render_pipeline
+            render_pipeline,
+            vertex_buffer,
+            index_buffer,
+            num_vertices
         }
     }
 
@@ -152,8 +180,9 @@ impl State {
             });
 
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.draw(0..3, 0..1);
-
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+            render_pass.draw_indexed(0..self.num_vertices,0, 0..1);
         }
         self.queue.submit(std::iter::once(enconder.finish()));
         output.present();

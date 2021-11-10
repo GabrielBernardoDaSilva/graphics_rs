@@ -1,11 +1,17 @@
 #![allow(dead_code)]
 #![allow(unused_imports)]
-
-
-
-use winit::{event::*, event_loop::{ControlFlow, EventLoop}, window::WindowBuilder};
+mod buffers;
 mod surface;
+
+use buffers::vertex_buffer;
 use surface::state::State;
+use winit::{
+    event::*,
+    event_loop::{ControlFlow, EventLoop},
+    window::WindowBuilder,
+};
+
+
 
 fn main() {
     env_logger::init();
@@ -13,12 +19,12 @@ fn main() {
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
     let mut state = pollster::block_on(State::new(&window));
-    event_loop.run(move |event, _, control_flow| {
-        match event {
-            Event::WindowEvent {
-                ref event,
-                window_id,
-            } if window_id == window.id() => if !state.input(event) { 
+    event_loop.run(move |event, _, control_flow| match event {
+        Event::WindowEvent {
+            ref event,
+            window_id,
+        } if window_id == window.id() => {
+            if !state.input(event) {
                 match event {
                     WindowEvent::CloseRequested
                     | WindowEvent::KeyboardInput {
@@ -39,20 +45,19 @@ fn main() {
                     _ => {}
                 }
             }
-            Event::RedrawRequested(_) => {
-                state.update();
-                match state.render() {
-                    Ok(_) => {}
-                    Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
-                    Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
-                    Err(e) => println!("{:?}", e),
-                }
-            }
-            Event::MainEventsCleared => {
-                window.request_redraw();
-            }
-            _ => {}
         }
+        Event::RedrawRequested(_) => {
+            state.update();
+            match state.render() {
+                Ok(_) => {}
+                Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
+                Err(wgpu::SurfaceError::OutOfMemory) => *control_flow = ControlFlow::Exit,
+                Err(e) => println!("{:?}", e),
+            }
+        }
+        Event::MainEventsCleared => {
+            window.request_redraw();
+        }
+        _ => {}
     });
-     
 }
