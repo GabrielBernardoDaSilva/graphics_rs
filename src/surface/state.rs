@@ -13,16 +13,28 @@ use wgpu::{
 };
 use winit::{dpi::PhysicalSize, event::WindowEvent, window::Window};
 
-use crate::{cameras::camera_controller::{self, CameraController}, instance::instances::{Instance as InstanceRs, InstanceRaw}, textures::texture::{self, DEPTH_FORMAT}};
 use crate::{
     buffers::vertex_buffer::{Vertex, INDICES, VERTICES},
     cameras::{camera::Camera, camera_uniform::CameraUniform},
 };
+use crate::{
+    cameras::camera_controller::{self, CameraController},
+    instance::instances::{Instance as InstanceRs, InstanceRaw},
+    model3d::{
+        self,
+        draw_model::DrawModel,
+        model::{self, Vertex as ModelVertex},
+    },
+    textures::texture::{self, DEPTH_FORMAT},
+};
 
-
-const NUM_INSTANCES_PER_ROW:  u32 = 10;
-const NUM_INSTANCES:  u32 = NUM_INSTANCES_PER_ROW * NUM_INSTANCES_PER_ROW;
-const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32>  = cgmath::Vector3::new(NUM_INSTANCES_PER_ROW as f32 * 0.5, 0.0, NUM_INSTANCES_PER_ROW as f32 * 0.5);
+const NUM_INSTANCES_PER_ROW: u32 = 10;
+const NUM_INSTANCES: u32 = NUM_INSTANCES_PER_ROW * NUM_INSTANCES_PER_ROW;
+const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32> = cgmath::Vector3::new(
+    NUM_INSTANCES_PER_ROW as f32 * 0.5,
+    0.0,
+    NUM_INSTANCES_PER_ROW as f32 * 0.5,
+);
 
 pub struct State {
     surface: Surface,
@@ -44,6 +56,7 @@ pub struct State {
     instances: Vec<InstanceRs>,
     instance_buffer: Buffer,
     depth_texture: texture::Texture,
+    obj_model: model3d::model::Model,
 }
 
 impl State {
@@ -193,37 +206,51 @@ impl State {
             usage: BufferUsages::INDEX,
         });
 
-
-
         let num_vertices = INDICES.len() as u32;
-        
-        let instances = (0..NUM_INSTANCES_PER_ROW).flat_map(|z|{
-            (0..NUM_INSTANCES_PER_ROW).map(move |x|{
-                let position = cgmath::Vector3 {x: x as f32, y: 0.0, z: z as f32} - INSTANCE_DISPLACEMENT;
-                let rotation = if position == cgmath::Vector3::zero() {
-                    cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0))
-                }else{
-                    cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
-                };
-                InstanceRs{
-                    position, 
-                    rotation
-                }
-            })
-        }).collect::<Vec<_>>();
+        const SPACE_BETWEEN: f32 = 3.0;
+        let instances = (0..NUM_INSTANCES_PER_ROW)
+            .flat_map(|z| {
+                (0..NUM_INSTANCES_PER_ROW).map(move |x| {
+                    let x = SPACE_BETWEEN * (x as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
+                    let z =SPACE_BETWEEN * (z as f32 - NUM_INSTANCES_PER_ROW as f32 / 2.0);
+                    
 
+                    let position = cgmath::Vector3 {
+                        x,
+                        y: 0.0,
+                        z,
+                    } - INSTANCE_DISPLACEMENT;
+                    let rotation = if position == cgmath::Vector3::zero() {
+                        cgmath::Quaternion::from_axis_angle(
+                            cgmath::Vector3::unit_z(),
+                            cgmath::Deg(0.0),
+                        )
+                    } else {
+                        cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
+                    };
+                    InstanceRs { position, rotation }
+                })
+            })
+            .collect::<Vec<_>>();
 
         let instance_data = instances.iter().map(InstanceRs::to_raw).collect::<Vec<_>>();
-        let instance_buffer  = device.create_buffer_init(
-            &wgpu::util::BufferInitDescriptor{
-                label: Some("Instance Buffer"),
-                contents: bytemuck::cast_slice(&instance_data),
-                usage: BufferUsages::VERTEX
-            }
+        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Instance Buffer"),
+            contents: bytemuck::cast_slice(&instance_data),
+            usage: BufferUsages::VERTEX,
+        });
+
+        let depth_texture =
+            texture::Texture::create_depth_texture(&device, &config, "depth_texture");
+
+        let res_dir = std::path::Path::new(env!("OUT_DIR")).join("res");
+        let obj_model = model::Model::load(
+            &device,
+            &queue,
+            &texture_bind_group_layout,
+            res_dir.join("cube.obj"),
         );
-
-
-        let depth_texture = texture::Texture::create_depth_texture(&device, &config, "depth_texture");
+        
 
         let render_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Render Pipeline Layout"),
@@ -237,7 +264,7 @@ impl State {
             vertex: VertexState {
                 module: &shader,
                 entry_point: "vs_main",
-                buffers: &[Vertex::desc(), InstanceRaw::desc()],
+                buffers: &[model::ModelVertex::desc(), InstanceRaw::desc()],
             },
             fragment: Some(FragmentState {
                 module: &shader,
@@ -257,25 +284,19 @@ impl State {
                 clamp_depth: false,
                 conservative: false,
             },
-            depth_stencil: Some(wgpu::DepthStencilState{
+            depth_stencil: Some(wgpu::DepthStencilState {
                 format: DEPTH_FORMAT,
                 depth_write_enabled: true,
                 depth_compare: wgpu::CompareFunction::Less,
                 stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default()
+                bias: wgpu::DepthBiasState::default(),
             }),
             multisample: MultisampleState {
                 count: 1,
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
-            
         });
-
-
-
-
-
 
         Self {
             surface,
@@ -283,6 +304,7 @@ impl State {
             queue,
             config,
             size,
+            obj_model,
             render_pipeline,
             vertex_buffer,
             index_buffer,
@@ -296,7 +318,7 @@ impl State {
             camera_bind_group,
             instances,
             instance_buffer,
-            depth_texture
+            depth_texture,
         }
     }
 
@@ -306,7 +328,8 @@ impl State {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
-            self.depth_texture = texture::Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
+            self.depth_texture =
+                texture::Texture::create_depth_texture(&self.device, &self.config, "depth_texture");
         }
     }
 
@@ -317,7 +340,11 @@ impl State {
     pub fn update(&mut self) {
         self.camera_controller.update_camera(&mut self.camera);
         self.camera_uniform.update_view_proj(&self.camera);
-        self.queue.write_buffer(&self.camera_buffer, 0, bytemuck::cast_slice(&[self.camera_uniform]));
+        self.queue.write_buffer(
+            &self.camera_buffer,
+            0,
+            bytemuck::cast_slice(&[self.camera_uniform]),
+        );
     }
 
     pub fn render(&mut self) -> Result<(), SurfaceError> {
@@ -346,26 +373,20 @@ impl State {
                         store: true,
                     },
                 }],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment{
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                     view: &self.depth_texture.view,
-                    depth_ops: Some(wgpu::Operations{
+                    depth_ops: Some(wgpu::Operations {
                         load: wgpu::LoadOp::Clear(1.0),
-                        store: true
+                        store: true,
                     }),
-                    stencil_ops: None
+                    stencil_ops: None,
                 }),
             });
 
             render_pass.set_pipeline(&self.render_pipeline);
-
-            render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
-            render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
-
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
-            render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-
-            render_pass.draw_indexed(0..self.num_vertices, 0, 0..self.instances.len() as _);
+            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));   
+            use model3d::draw_model;
+            render_pass.draw_model_instanced(&self.obj_model, 0..self.instances.len() as u32, &self.camera_bind_group);
         }
         self.queue.submit(std::iter::once(enconder.finish()));
         output.present();
