@@ -1,3 +1,4 @@
+use cgmath::{InnerSpace, Quaternion, Rotation3, Zero};
 use wgpu::{
     util::{BufferInitDescriptor, DeviceExt},
     Backends, BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayoutDescriptor,
@@ -12,11 +13,16 @@ use wgpu::{
 };
 use winit::{dpi::PhysicalSize, event::WindowEvent, window::Window};
 
-use crate::{cameras::camera_controller::{self, CameraController}, textures::texture};
+use crate::{cameras::camera_controller::{self, CameraController}, instance::instances::{Instance as InstanceRs, InstanceRaw}, textures::texture};
 use crate::{
     buffers::vertex_buffer::{Vertex, INDICES, VERTICES},
     cameras::{camera::Camera, camera_uniform::CameraUniform},
 };
+
+
+const NUM_INSTANCES_PER_ROW:  u32 = 10;
+const NUM_INSTANCES:  u32 = NUM_INSTANCES_PER_ROW * NUM_INSTANCES_PER_ROW;
+const INSTANCE_DISPLACEMENT: cgmath::Vector3<f32>  = cgmath::Vector3::new(NUM_INSTANCES_PER_ROW as f32 * 0.5, 0.0, NUM_INSTANCES_PER_ROW as f32 * 0.5);
 
 pub struct State {
     surface: Surface,
@@ -35,6 +41,8 @@ pub struct State {
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+    instances: Vec<InstanceRs>,
+    instance_buffer: Buffer
 }
 
 impl State {
@@ -184,6 +192,35 @@ impl State {
             usage: BufferUsages::INDEX,
         });
 
+
+
+        let num_vertices = INDICES.len() as u32;
+        
+        let instances = (0..NUM_INSTANCES_PER_ROW).flat_map(|z|{
+            (0..NUM_INSTANCES_PER_ROW).map(move |x|{
+                let position = cgmath::Vector3 {x: x as f32, y: 0.0, z: z as f32} - INSTANCE_DISPLACEMENT;
+                let rotation = if position == cgmath::Vector3::zero() {
+                    cgmath::Quaternion::from_axis_angle(cgmath::Vector3::unit_z(), cgmath::Deg(0.0))
+                }else{
+                    cgmath::Quaternion::from_axis_angle(position.normalize(), cgmath::Deg(45.0))
+                };
+                InstanceRs{
+                    position, 
+                    rotation
+                }
+            })
+        }).collect::<Vec<_>>();
+
+
+        let instance_data = instances.iter().map(InstanceRs::to_raw).collect::<Vec<_>>();
+        let instance_buffer  = device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor{
+                label: Some("Instance Buffer"),
+                contents: bytemuck::cast_slice(&instance_data),
+                usage: BufferUsages::VERTEX
+            }
+        );
+
         let render_pipeline_layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
             label: Some("Render Pipeline Layout"),
             bind_group_layouts: &[&texture_bind_group_layout, &camera_bind_group_layout],
@@ -196,7 +233,7 @@ impl State {
             vertex: VertexState {
                 module: &shader,
                 entry_point: "vs_main",
-                buffers: &[Vertex::desc()],
+                buffers: &[Vertex::desc(), InstanceRaw::desc()],
             },
             fragment: Some(FragmentState {
                 module: &shader,
@@ -222,9 +259,13 @@ impl State {
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
+            
         });
 
-        let num_vertices = INDICES.len() as u32;
+
+
+
+
 
         Self {
             surface,
@@ -243,6 +284,8 @@ impl State {
             camera_uniform,
             camera_buffer,
             camera_bind_group,
+            instances,
+            instance_buffer
         }
     }
 
@@ -295,11 +338,15 @@ impl State {
             });
 
             render_pass.set_pipeline(&self.render_pipeline);
+
             render_pass.set_bind_group(0, &self.diffuse_bind_group, &[]);
             render_pass.set_bind_group(1, &self.camera_bind_group, &[]);
+
             render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
             render_pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-            render_pass.draw_indexed(0..self.num_vertices, 0, 0..1);
+
+            render_pass.draw_indexed(0..self.num_vertices, 0, 0..self.instances.len() as _);
         }
         self.queue.submit(std::iter::once(enconder.finish()));
         output.present();

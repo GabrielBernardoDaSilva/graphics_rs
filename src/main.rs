@@ -4,6 +4,7 @@ mod buffers;
 mod surface;
 mod textures;
 mod cameras;
+mod instance;
 
 use buffers::vertex_buffer;
 use surface::state::State;
